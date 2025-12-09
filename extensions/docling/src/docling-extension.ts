@@ -17,7 +17,7 @@
  ***********************************************************************/
 
 import { randomInt } from 'node:crypto';
-import { copyFile, mkdir, rm } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
 import * as api from '@kortex-app/api';
@@ -26,11 +26,10 @@ import type { ContainerExtensionAPI } from '@kortex-app/container-extension-api'
 // eslint-disable-next-line import/no-extraneous-dependencies
 import type Dockerode from 'dockerode';
 
-import rootPackage from '../package.json' with { type: 'json' };
 import { generateRandomFolderName } from './util';
 
-const DOCLING_IMAGE = `ghcr.io/kortex-hub/kortex-docling:${rootPackage.version}`;
-const DOCLING_PORT = 8000;
+const DOCLING_IMAGE = `quay.io/docling-project/docling-serve:v1.9.0`;
+const DOCLING_PORT = 5001;
 const CONTAINER_NAME = 'docling-chunker';
 
 type DoclingContainerInfo = {
@@ -65,7 +64,7 @@ export class DoclingExtension {
             const doclingPort = container.Labels?.['io.kortex.docling.port'];
             const doclingFolder = container.Labels?.['io.kortex.docling.folder'];
 
-            if (doclingPort) {
+            if (doclingPort !== undefined && doclingFolder !== undefined) {
               console.log(`Found container: (with port ${doclingPort}, state: ${container.State})`);
               if (container.State !== 'running') {
                 console.log('Container is not running, restarting...');
@@ -209,6 +208,8 @@ export class DoclingExtension {
 
     // Add to subscriptions for proper cleanup
     this.extensionContext.subscriptions.push(disposable);
+
+    await this.convertDocument(Uri.file('C:\\Users\\Jeff Maury\\Downloads\\Biography_ Dr Aris Thorne.pdf'));
   }
 
   /**
@@ -259,19 +260,24 @@ export class DoclingExtension {
       const docFileName = basename(docPath);
       const destPath = join(folderPath, docFileName);
       await copyFile(docPath, destPath);
+      const buffer = await readFile(destPath);
+      const blob = new Blob([buffer]);
 
+      const data = new FormData();
+      data.set('files', blob);
       // Send conversion request to the service
-      const response = await fetch(
-        `http://localhost:${this.containerInfo.port}/convert?folder_name=${encodeURIComponent(folderName)}`,
-        {
-          method: 'GET',
-        },
-      );
+      const response = await fetch(`http://localhost:${this.containerInfo.port}/v1/chunk/hierarchical/file`, {
+        method: 'POST',
+        body: data,
+      });
 
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`Conversion failed: ${response.status} ${errorText}`);
       }
+
+      const res = await response.json();
+      console.log(res);
 
       const result = (await response.json()) as {
         success: boolean;
